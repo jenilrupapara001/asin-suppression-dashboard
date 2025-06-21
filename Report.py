@@ -4,6 +4,7 @@ import os
 from datetime import datetime
 
 DATA_FILE = "suppression_data.csv"
+SUPPRESSION_LOG_FILE = "monthly_suppressed_log.csv"
 
 # --------- Utilities ----------
 def normalize_date_str(col):
@@ -33,20 +34,35 @@ def detect_streaks(df, threshold=7):
 
     return streak_data[streak_data.apply(has_long_suppression, axis=1)]
 
+def extract_monthly_suppressions(df):
+    date_cols = [col for col in df.columns if normalize_date_str(col)]
+    rows = []
+    for _, row in df.iterrows():
+        asin = row['ASIN']
+        sku = row['SKU']
+        for col in date_cols:
+            try:
+                if str(row[col]).strip() == "1":
+                    rows.append({"ASIN": asin, "SKU": sku, "Suppressed Date": normalize_date_str(col)})
+            except:
+                continue
+    log_df = pd.DataFrame(rows)
+    log_df.to_csv(SUPPRESSION_LOG_FILE, index=False)
+    return log_df
+
 # --------- UI Setup ----------
 st.set_page_config(page_title="ASIN Suppression Tracker", layout="wide")
 st.title("🚫 ASIN Suppression Tracker")
 
 col1, col2 = st.columns(2)
 with col1:
-    uploaded_file = st.file_uploader("📤 Upload Daily Suppression Excel File", type=["xlsx"])
+    uploaded_file = st.file_uploader("📄 Upload Daily Suppression Excel File", type=["xlsx"])
 with col2:
-    if st.button("🧹 Reset All Data"):
-        if os.path.exists(DATA_FILE):
-            os.remove(DATA_FILE)
-            st.success("✅ All stored data has been cleared.")
-        else:
-            st.info("ℹ️ No data to delete.")
+    if st.button("🩹 Reset All Data"):
+        for file in [DATA_FILE, SUPPRESSION_LOG_FILE]:
+            if os.path.exists(file):
+                os.remove(file)
+        st.success("✅ All stored data has been cleared.")
 
 # --------- Handle Upload ---------
 if uploaded_file:
@@ -73,7 +89,8 @@ if uploaded_file:
         all_df = new_df
 
     all_df.to_csv(DATA_FILE, index=False)
-    st.success("✅ Data stored successfully.")
+    extract_monthly_suppressions(all_df)
+    st.success("✅ Data stored and monthly suppression log updated.")
 else:
     all_df = pd.read_csv(DATA_FILE) if os.path.exists(DATA_FILE) else pd.DataFrame()
 
@@ -99,7 +116,6 @@ if not all_df.empty:
             start_date = None
             end_date = None
 
-    # Filter columns based on selected filters
     filtered_cols = []
     for col in all_df.columns:
         if normalize_date_str(col):
@@ -114,12 +130,9 @@ if not all_df.empty:
 
     if filtered_cols:
         temp_df = all_df[['ASIN', 'SKU'] + filtered_cols].copy()
-        total_rows = temp_df.shape[0]  # 🔹 All ASINs in filtered range
-
-        # Filter only suppressed ASINs
+        total_rows = temp_df.shape[0]
         filtered_df = temp_df[temp_df[filtered_cols].apply(lambda row: any(row == 1), axis=1)]
-        suppressed_rows = filtered_df.shape[0]  # 🔹 Suppressed only
-
+        suppressed_rows = filtered_df.shape[0]
         if not filtered_df.empty:
             st.success("✅ Showing filtered suppression data.")
         else:
@@ -134,20 +147,26 @@ else:
     total_rows = 0
     suppressed_rows = 0
 
-# --------- Alert & Output ---------
+# --------- Alerts & Downloads ---------
 if not filtered_df.empty:
     alert_df = detect_streaks(filtered_df)
     st.metric("📦 Total ASIN Entries (Filtered Range)", total_rows)
-    
     st.metric("📈 Suppressed > 7 Days", len(alert_df))
 
     st.subheader("🚨 Suppression Alerts")
     st.dataframe(alert_df, use_container_width=True)
 
     alert_csv = alert_df.to_csv(index=False).encode("utf-8")
-    st.download_button("📥 Download Alert Report", alert_csv, "suppressed_alerts.csv", "text/csv")
+    st.download_button("📅 Download Alert Report", alert_csv, "suppressed_alerts.csv", "text/csv")
 
     with open(DATA_FILE, "rb") as f:
         st.download_button("📁 Download Full Stored Data", f, "suppression_data.csv", "text/csv")
+
+    if os.path.exists(SUPPRESSION_LOG_FILE):
+        log_df = pd.read_csv(SUPPRESSION_LOG_FILE)
+        st.subheader("📘 Monthly Suppressed ASINs (No Streak Required)")
+        st.dataframe(log_df, use_container_width=True)
+        log_csv = log_df.to_csv(index=False).encode("utf-8")
+        st.download_button("📅 Download Monthly Suppressed Log", log_csv, "monthly_suppressed_log.csv", "text/csv")
 else:
     st.info("Upload data to begin or adjust filters.")
